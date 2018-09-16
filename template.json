@@ -1,0 +1,178 @@
+{
+    "$schema": "http://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "uniqueResourceNameSuffix": {
+            "type": "string",
+            "defaultValue": "[uniqueString(subscription().subscriptionId, resourceGroup().id)]",
+            "metadata": {
+                "description": "The suffix to add to resource names that require global uniqueness."
+            }
+        },
+        "usePrimaryKey": {
+            "type": "bool",
+            "defaultValue": true,
+            "metadata": {
+                "description": "If true, the primary keys for each service will be used for application configuration settings. If false, secondary keys will be used."
+            }
+        }
+    },
+    "variables": {
+        "resourceNamePrefix": "jd",
+        "storageAccountName": "[concat(variables('resourceNamePrefix'), 'stor', parameters('uniqueResourceNameSuffix'))]",
+        "serviceBusNamespaceName": "[concat(variables('resourceNamePrefix'), 'sb', parameters('uniqueResourceNameSuffix'))]",
+        "cosmosDBAccountName": "[concat(variables('resourceNamePrefix'), 'cos', parameters('uniqueResourceNameSuffix'))]",
+        "keyVaultName": "[concat(variables('resourceNamePrefix'), 'kv', parameters('uniqueResourceNameSuffix'))]",
+        "functionsAppServicePlanName": "FunctionsAppServicePlan",
+        "functionsAppServiceName": "[concat(variables('resourceNamePrefix'), 'fn', parameters('uniqueResourceNameSuffix'))]",
+        "testerFunctionName": "TestKeys",
+        "testerFunctionResourceId": "[resourceId('Microsoft.Web/sites/functions', variables('functionsAppServiceName'), variables('testerFunctionName'))]",
+        "serviceBusAuthorizationRuleName": "RootManageSharedAccessKey",
+        "serviceBusAuthorizationRuleResourceId": "[resourceId('Microsoft.ServiceBus/namespaces/authorizationRules', variables('serviceBusNamespaceName'), variables('serviceBusAuthorizationRuleName'))]"
+    },
+    "resources": [
+        {
+            "name": "[variables('storageAccountName')]",
+            "type": "Microsoft.Storage/storageAccounts",
+            "apiVersion": "2018-02-01",
+            "location": "[resourceGroup().location]",
+            "kind": "StorageV2",
+            "sku": {
+                "name": "Standard_LRS",
+                "tier": "Standard"
+            },
+            "properties": {
+                "accessTier": "Hot"
+            }
+        },
+        {
+            "name": "[variables('cosmosDBAccountName')]",
+            "type": "Microsoft.DocumentDb/databaseAccounts",
+            "apiVersion": "2015-04-08",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "name": "[variables('cosmosDBAccountName')]",
+                "databaseAccountOfferType": "Standard"
+            }
+        },
+        {
+            "name": "[variables('serviceBusNamespaceName')]",
+            "type": "Microsoft.ServiceBus/namespaces",
+            "apiVersion": "2015-08-01",
+            "location": "[resourceGroup().location]",
+            "properties": {}
+        },
+        {
+            "name": "[variables('functionsAppServicePlanName')]",
+            "type": "Microsoft.Web/serverfarms",
+            "location": "[resourceGroup().location]",
+            "apiVersion": "2016-09-01",
+            "sku": {
+                "name": "Y1",
+                "tier": "Dynamic",
+                "size": "Y1",
+                "family": "Y",
+                "capacity": 0
+            },
+            "kind": "functionapp",
+            "properties": {
+                "workerTierName": null,
+                "adminSiteName": null,
+                "hostingEnvironmentProfile": null,
+                "perSiteScaling": false,
+                "reserved": false,
+                "targetWorkerCount": 0,
+                "targetWorkerSizeId": 0
+            }
+        },
+        {
+            "name": "[variables('functionsAppServiceName')]",
+            "type": "Microsoft.Web/sites",
+            "location": "[resourceGroup().location]",
+            "apiVersion": "2016-08-01",
+            "kind": "functionapp",
+            "properties": {
+                "siteConfig": {
+                    "ftpsState": "Disabled"
+                },
+                "enabled": true,
+                "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('functionsAppServicePlanName'))]",
+                "reserved": false
+            },
+            "resources": [
+                {
+                    "name": "appsettings",
+                    "type": "config",
+                    "apiVersion": "2014-11-01",
+                    "properties": {
+                        "StorageAccountConnectionString": "[concat('DefaultEndpointsProtocol=https;AccountName=', variables('storageAccountName'), ';AccountKey=', if(parameters('usePrimaryKey'), listKeys(variables('storageAccountName'),'2015-05-01-preview').key1, listKeys(variables('storageAccountName'),'2015-05-01-preview').key2))]",
+                        "CosmosDBAccountEndpoint": "[concat('https://', variables('cosmosDBAccountName'), '.documents.azure.com:443/')]",
+                        "CosmosDBAccountKey": "[if(parameters('usePrimaryKey'), listKeys(resourceId('Microsoft.DocumentDB/databaseAccounts', variables('cosmosDBAccountName')), '2015-11-06').primaryMasterKey, listKeys(resourceId('Microsoft.DocumentDB/databaseAccounts', variables('cosmosDBAccountName')), '2015-11-06').secondaryMasterKey)]",
+                        "ServiceBusNamespaceConnectionString": "[if(parameters('usePrimaryKey'), listKeys(variables('serviceBusAuthorizationRuleResourceId'), '2017-04-01').primaryConnectionString, listKeys(variables('serviceBusAuthorizationRuleResourceId'), '2017-04-01').secondaryConnectionString)]"
+                    },
+                    "dependsOn": [
+                        "[resourceId('Microsoft.Web/sites', variables('functionsAppServiceName'))]",
+                        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]",
+                        "[resourceId('Microsoft.DocumentDB/databaseAccounts', variables('cosmosDBAccountName'))]",
+                        "[resourceId('Microsoft.ServiceBus/namespaces', variables('serviceBusNamespaceName'))]"
+                    ]
+                },
+                {
+                    "name": "[concat(variables('functionsAppServiceName'), '/', variables('testerFunctionName'))]",
+                    "type": "Microsoft.Web/sites/functions",
+                    "apiVersion": "2015-08-01",
+                    "properties": {
+                        "config": {
+                            "bindings": [
+                                {
+                                    "authLevel": "function",
+                                    "name": "req",
+                                    "type": "httpTrigger",
+                                    "direction": "in",
+                                    "methods": [
+                                        "get",
+                                        "post"
+                                    ]
+                                },
+                                {
+                                    "name": "$return",
+                                    "type": "http",
+                                    "direction": "out"
+                                }
+                            ],
+                            "disabled": false
+                        },
+                        "files": {
+                            "project.json": "{\n    \"frameworks\": {\n        \"net46\": {\n            \"dependencies\": {\n                \"Microsoft.Azure.DocumentDB\": \"2.0.0\",\n                \"WindowsAzure.ServiceBus\": \"5.0.0\"\n            }\n        }\n    }\n}\n",
+                            "run.csx": "#r \"Microsoft.WindowsAzure.Storage\"\n\nusing System;\nusing System.Configuration;\nusing System.Net;\nusing Microsoft.Azure.Documents;\nusing Microsoft.Azure.Documents.Client;\nusing Microsoft.ServiceBus;\nusing Microsoft.WindowsAzure.Storage;\n\npublic static async Task<HttpResponseMessage> Run(HttpRequestMessage req, TraceWriter log)\n{\n    // Test connectivity to Azure Storage\n    try\n    {\n        var storageAccount = CloudStorageAccount.Parse(ConfigurationManager.AppSettings[\"StorageAccountConnectionString\"]);\n        var storageClient = storageAccount.CreateCloudBlobClient();\n        var storageContainer = storageClient.GetContainerReference(\"mycontainer\");\n        await storageContainer.ExistsAsync();\n    }\n    catch (StorageException ex) when (ex.RequestInformation.HttpStatusCode == 403)\n    {\n        return req.CreateResponse(HttpStatusCode.InternalServerError, \"The storage account key is not valid.\");\n    }\n\n    // Test connectivity to Cosmos DB\n    try\n    {\n        var cosmosDBClient = new DocumentClient(\n            new Uri(ConfigurationManager.AppSettings[\"CosmosDBAccountEndpoint\"]), \n            ConfigurationManager.AppSettings[\"CosmosDBAccountKey\"]);\n        await cosmosDBClient.GetDatabaseAccountAsync();\n    }\n    catch (DocumentClientException ex) when (ex.StatusCode == HttpStatusCode.Unauthorized)\n    {\n        return req.CreateResponse(HttpStatusCode.InternalServerError, \"The Cosmos DB account key is not valid.\");\n    }\n\n    // Test connectivity to Service Bus\n    try\n    {\n        var serviceBusNamespaceManager = NamespaceManager.CreateFromConnectionString(ConfigurationManager.AppSettings[\"ServiceBusNamespaceConnectionString\"]);\n        await serviceBusNamespaceManager.GetQueuesAsync();\n    }\n    catch (UnauthorizedAccessException ex)\n    {\n        return req.CreateResponse(HttpStatusCode.InternalServerError, \"The Service Bus namespace key is not valid.\");\n    }\n\n    // If we got this far then everything is fine\n    return req.CreateResponse(HttpStatusCode.OK);\n}\n"
+                        }
+                    },
+                    "dependsOn": [
+                        "[resourceId('Microsoft.Web/sites', variables('functionsAppServiceName'))]"
+                    ]
+                }
+            ],
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/serverfarms', variables('functionsAppServicePlanName'))]"
+            ]
+        }
+    ],
+    "outputs": {
+        "storageAccountName": {
+            "type": "string",
+            "value": "[variables('storageAccountName')]"
+        },
+        "cosmosDBAccountName": {
+            "type": "string",
+            "value": "[variables('cosmosDBAccountName')]"
+        },
+        "serviceBusNamespaceName": {
+            "type": "string",
+            "value": "[variables('serviceBusNamespaceName')]"
+        },
+        "testerFunctionUrl": {
+            "type": "string",
+            "value": "[listSecrets(variables('testerFunctionResourceId'), '2015-08-01').trigger_url]"
+        }
+    }
+}

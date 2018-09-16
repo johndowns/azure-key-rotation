@@ -1,0 +1,10 @@
+{
+    "frameworks": {
+        "net46": {
+            "dependencies": {
+                "Microsoft.Azure.DocumentDB": "2.0.0",
+                "WindowsAzure.ServiceBus": "5.0.0"
+            }
+        }
+    }
+}
