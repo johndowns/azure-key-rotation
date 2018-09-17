@@ -28,7 +28,8 @@
         "testerFunctionName": "TestKeys",
         "testerFunctionResourceId": "[resourceId('Microsoft.Web/sites/functions', variables('functionsAppServiceName'), variables('testerFunctionName'))]",
         "serviceBusAuthorizationRuleName": "RootManageSharedAccessKey",
-        "serviceBusAuthorizationRuleResourceId": "[resourceId('Microsoft.ServiceBus/namespaces/authorizationRules', variables('serviceBusNamespaceName'), variables('serviceBusAuthorizationRuleName'))]"
+        "serviceBusAuthorizationRuleResourceId": "[resourceId('Microsoft.ServiceBus/namespaces/authorizationRules', variables('serviceBusNamespaceName'), variables('serviceBusAuthorizationRuleName'))]",
+        "keyVaultName": "[concat(variables('resourceNamePrefix'), 'kv', parameters('uniqueResourceNameSuffix'))]"
     },
     "resources": [
         {
@@ -154,6 +155,58 @@
             ],
             "dependsOn": [
                 "[resourceId('Microsoft.Web/serverfarms', variables('functionsAppServicePlanName'))]"
+            ]
+        },
+        {
+            "name": "[variables('keyVaultName')]",
+            "type": "Microsoft.KeyVault/vaults",
+            "apiVersion": "2015-06-01",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "tenantId": "[subscription().tenantId]",
+                "accessPolicies": [],
+                "sku": {
+                    "name": "standard",
+                    "family": "A"
+                }
+            },
+            "resources": [
+                {
+                    "type": "secrets",
+                    "name": "CosmosDBAccountKey",
+                    "apiVersion": "2015-06-01",
+                    "properties": {
+                        "value": "[if(parameters('usePrimaryKey'), listKeys(resourceId('Microsoft.DocumentDB/databaseAccounts', variables('cosmosDBAccountName')), '2015-11-06').primaryMasterKey, listKeys(resourceId('Microsoft.DocumentDB/databaseAccounts', variables('cosmosDBAccountName')), '2015-11-06').secondaryMasterKey)]"
+                    },
+                    "dependsOn": [
+                        "[variables('keyVaultName')]",
+                        "[variables('cosmosDBAccountName')]"
+                    ]
+                },
+                {
+                    "type": "secrets",
+                    "name": "StorageAccountConnectionString",
+                    "apiVersion": "2015-06-01",
+                    "properties": {
+                        "value": "[concat('DefaultEndpointsProtocol=https;AccountName=', variables('storageAccountName'), ';AccountKey=', if(parameters('usePrimaryKey'), listKeys(variables('storageAccountName'),'2015-05-01-preview').key1, listKeys(variables('storageAccountName'),'2015-05-01-preview').key2))]"
+                    },
+                    "dependsOn": [
+                        "[variables('keyVaultName')]",
+                        "[variables('storageAccountName')]"
+                    ]
+                },
+                {
+                    "type": "secrets",
+                    "name": "ServiceBusNamespaceConnectionString",
+                    "apiVersion": "2015-06-01",
+                    "properties": {
+                        "value": "[if(parameters('usePrimaryKey'), listKeys(variables('serviceBusAuthorizationRuleResourceId'), '2017-04-01').primaryConnectionString, listKeys(variables('serviceBusAuthorizationRuleResourceId'), '2017-04-01').secondaryConnectionString)]"
+                    },
+                    "dependsOn": [
+                        "[variables('keyVaultName')]",
+                        "[variables('serviceBusNamespaceName')]"
+                    ]
+                }
             ]
         }
     ],
