@@ -7,14 +7,48 @@ param
 
 $ErrorActionPreference = 'Stop'
 
+# Create some functions that we'll use to manage resource group tags to tell us which keys we're currently using
+function GetUsePrimaryKeyTag($ResourceGroupName)
+{
+    $resourceGroupTags = (Get-AzureRmResourceGroup -Name $ResourceGroupName).Tags
+    if ($null -ne $resourceGroupTags -and $resourceGroupTags['CurrentKeys'] -eq 'Primary')
+    {
+        return $false
+    }
+    else
+    {
+        return $true
+    }
+}
+
+function UpdateUsePrimaryKeyTag($ResourceGroupName, $UsePrimaryKey)
+{
+    $tagValue = (&{if($usePrimaryKey) { 'Primary' } else { 'Secondary' }})
+    $group = Get-AzureRmResourceGroup $ResourceGroupName
+    if ($null -eq $group.Tags)
+    {
+        Set-AzureRmResourceGroup -Name $ResourceGroupName -Tag @{ CurrentKeys = $tagValue }
+    }
+    else
+    {
+        $tags = $group.Tags
+        $tags['CurrentKeys'] = $tagValue
+        Set-AzureRmResourceGroup -Tag $tags -Name $ResourceGroupName
+    }
+}
+
 # Decide whether to use primary or secondary keys for this deployment
-$usePrimaryKey = [System.Convert]::ToBoolean((Get-Random 2))
+# We do this based on the presence of a tag on the resource group - if it's set to 'Primary' then we switch the next deployment to use secondary keys; if the tag is absent or set to any value other than 'Primary' then we use the primary keys
+# To select at random instead of using a resource group tag, use this line:
+#   $usePrimaryKey = [System.Convert]::ToBoolean((Get-Random 2))
+$usePrimaryKey = GetUsePrimaryKeyTag -ResourceGroupName $ResourceGroupName
+
 Write-Host "Using $(&{if($usePrimaryKey) { 'primary' } else { 'secondary' }}) keys."
 
 # Deploy ARM template
 $armTemplateOutputs = New-AzureRmResourceGroupDeployment `
     -ResourceGroupName $ResourceGroupName `
-    -TemplateFile [System.IO.Path]::Combine($PSScriptRoot, 'template.json') `
+    -TemplateFile (Join-Path $PSScriptRoot 'template.json') `
     -usePrimaryKey $usePrimaryKey `
     -Mode Complete `
     -Verbose -Force
@@ -23,8 +57,8 @@ $cosmosDBAccountName = $armTemplateOutputs.Outputs['cosmosDBAccountName'].Value
 $serviceBusNamespaceName = $armTemplateOutputs.Outputs['serviceBusNamespaceName'].Value
 $testerFunctionUrl = $armTemplateOutputs.Outputs['testerFunctionUrl'].Value
 
-# Wait 20 seconds for the app settings to be updated
-Start-Sleep -Seconds 20
+# Re-tag the resource group to indicate that we're now using the primary/secondary keys
+UpdateUsePrimaryKeyTag -ResourceGroupName $ResourceGroupName -UsePrimaryKey $usePrimaryKey
 
 # Test to make sure the keys are valid
 Write-Host 'Checking keys are valid...'
